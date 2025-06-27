@@ -9,11 +9,6 @@ const squarebtn = document.getElementById("square");
 const cubebtn = document.getElementById("cube");
 const factorialbtn = document.getElementById("factorial");
 
-// Calculator State
-let currentInput = '0';
-let previousInput = '';
-let calculation = null;
-let shouldResetScreen = false;
 
 // Number Buttons
 buttons.forEach(button => {
@@ -37,10 +32,10 @@ buttons.forEach(button => {
   });
 });
 
-// Clear Button
+// Clear Button Handler
 clearbtn.addEventListener("click", clearAll);
 
-// Delete Button
+// Delete Button Handler
 delbtn.addEventListener("click", () => {
   if (currentInput.length === 1) {
     currentInput = "0";
@@ -50,88 +45,148 @@ delbtn.addEventListener("click", () => {
   updateDisplay();
 });
 
-// Equals Button
-equalsbtn.addEventListener("click", calculate);
+// Calculator State
+let currentInput = '0';
+let previousInput = '';
+let calculation = null;
+let shouldResetScreen = false;
 
-// Percent Button
+// Percent Button Handler
 percentbtn.addEventListener("click", () => {
   try {
-     // Handle empty input
     if (!currentInput || currentInput === "0") {
-      currentInput = "0";
+      currentInput = "0%";
       updateDisplay();
       return;
     }
+    
+    // Toggle percentage sign
+    if (currentInput.endsWith('%')) {
+      currentInput = currentInput.slice(0, -1);
+    } else {
+      currentInput += '%';
+    }
+    updateDisplay();
+  } catch (error) {
+    handleError(error);
+  }
+});
 
-    // Determine which operation is being used
-    let operator = null;
-    if (currentInput.includes("+")) operator = "+";
-    else if (currentInput.includes("-")) operator = "-";
-    else if (currentInput.includes("*")) operator = "*";
-    else if (currentInput.includes("/")) operator = "/";
-
-    // Case 1: Simple percentage conversion (e.g., "9" → "0.09")
-    if (!operator) {
+// Equals Button Handler 
+equalsbtn.addEventListener("click", () => {
+  try {
+    if (!currentInput || currentInput === "") return;
+    
+    // Handle standalone percentage (8% → 0.08)
+    if (currentInput.endsWith('%') && !hasOperator(currentInput)) {
       const number = parseFloat(currentInput);
-      if (isNaN(number)) throw new Error("Invalid number");
-      
       currentInput = (number / 100).toString();
       updateDisplay();
       shouldResetScreen = true;
       return;
     }
-
-    // Case 2: Percentage operations
-    const parts = currentInput.split(operator).map(p => p.trim());
     
-    // Validation
-    if (parts.length !== 2) throw new Error(`Format: number${operator}number`);
-    if (parts.some(p => !p)) throw new Error("Missing values");
+    // Convert expression for evaluation
+    let expression = currentInput;
     
-    const number = parseFloat(parts[0]);
-    const percent = parseFloat(parts[1]);
+    // First handle modulus operations (must be done before percentage conversion)
+    expression = expression.replace(/([\d.]+)\s*%\s*([\d.]+)(?![%])/g, 
+      (match, a, b) => `${parseFloat(a)} % ${parseFloat(b)}`);
     
-    if (isNaN(number) || isNaN(percent)) throw new Error("Enter valid numbers");
-
-    // Perform the appropriate calculation
-    let result;
-    switch (operator) {
-      case "+":
-        // Addition: 100 + 10% = 110 (100 + 10% of 100)
-        result = number * (1 + (percent / 100));
-        break;
-      case "-":
-        // Subtraction: 100 - 10% = 90 (100 - 10% of 100)
-        result = number * (1 - (percent / 100));
-        break;
-      case "*":
-        // Multiplication: 100 * 10% = 10 (100 × 10%)
-        result = number * (percent / 100);
-        break;
-      case "/":
-        // Division: 100 / 10% = 1000 (100 ÷ 10%)
-        if (percent === 0) throw new Error("Cannot divide by zero");
-        result = number / (percent / 100);
-        break;
-      default:
-        throw new Error("Unsupported operation");
+    // Handle percentage operations
+    expression = expression.replace(/([\d.]+)\s*([+-])\s*([\d.]+)%/g, 
+      (match, num, op, percent) => {
+        const value = parseFloat(num);
+        const pct = parseFloat(percent);
+        return op === '+' ? 
+          `${value} + ${value * pct / 100}` : 
+          `${value} - ${value * pct / 100}`;
+      });
+    
+    // Convert remaining percentages to decimal (for percentage-percentage operations)
+    expression = expression.replace(/([\d.]+)%/g, (match, num) => {
+      return parseFloat(num) / 100;
+    });
+    
+    // Replace 'mod' with modulus operator if present
+    expression = expression.replace(/mod/gi, '%');
+    
+    // Evaluate the expression safely
+    const result = evaluateMathExpression(expression);
+    
+    if (!isFinite(result)) {
+      throw new Error("Math Error");
     }
-
-    // Update display
+    
     currentInput = result.toString();
-    updateDisplay();
     shouldResetScreen = true;
-
-  } catch (error) {
-    handleError(error);
-    // Auto-clear error after delay
-    setTimeout(() => {
-      if (currentInput.startsWith("Error")) clearAll();
-    }, 1500);
+    updateDisplay();
+  } catch (e) {
+    handleError(e);
   }
 });
 
-// Square Button
+// Enhanced evaluation function
+function evaluateMathExpression(expr) {
+  // First evaluate parentheses
+  while (/\(([^()]+)\)/.test(expr)) {
+    expr = expr.replace(/\(([^()]+)\)/g, (_, inner) => evaluateBasicOps(inner));
+  }
+  
+  // Then evaluate the remaining expression
+  return evaluateBasicOps(expr);
+}
+
+function evaluateBasicOps(expr) {
+  // Handle *, /, % (modulus)
+  while (/([\d.]+)\s*([*\/%])\s*([\d.]+)/.test(expr)) {
+    expr = expr.replace(/([\d.]+)\s*([*\/%])\s*([\d.]+)/, (_, a, op, b) => {
+      a = parseFloat(a); b = parseFloat(b);
+      switch(op) {
+        case '*': return a * b;
+        case '/': 
+          if (b === 0) throw new Error("Cannot divide by zero");
+          return a / b;
+        case '%': 
+          if (b === 0) throw new Error("Cannot mod by zero");
+          return a % b;
+      }
+    });
+  }
+  
+  // Handle +, -
+  while (/([\d.]+)\s*([+-])\s*([\d.]+)/.test(expr)) {
+    expr = expr.replace(/([\d.]+)\s*([+-])\s*([\d.]+)/, (_, a, op, b) => {
+      return op === '+' ? parseFloat(a) + parseFloat(b) : parseFloat(a) - parseFloat(b);
+    });
+  }
+  
+  return parseFloat(expr);
+}
+
+// Helper Functions
+function hasOperator(input) {
+  const cleaned = input.replace(/^-/, '');
+  return /[+\-*\/%]/.test(cleaned);
+}
+
+function updateDisplay() { input.value = currentInput; }
+//Clear A;; function
+function clearAll() { 
+  currentInput = '0'; 
+  previousInput = ''; 
+  calculation = null; 
+  shouldResetScreen = false; 
+  updateDisplay(); 
+}
+
+function handleError(error) {
+  currentInput = "Error: " + error.message;
+  shouldResetScreen = true;
+  updateDisplay();
+  setTimeout(clearAll, 1500);
+}
+// Square Button Handler
 squarebtn.addEventListener("click", () => {
   try {
     const val = parseFloat(currentInput);
@@ -144,7 +199,7 @@ squarebtn.addEventListener("click", () => {
   }
 });
 
-// Cube Button
+// Cube Button Handler
 cubebtn.addEventListener("click", () => {
   try {
     const val = parseFloat(currentInput);
@@ -157,7 +212,7 @@ cubebtn.addEventListener("click", () => {
   }
 });
 
-// Factorial Button
+// Factorial Button Handler
 factorialbtn.addEventListener("click", () => {
   try {
     const val = parseInt(currentInput);
@@ -176,48 +231,3 @@ factorialbtn.addEventListener("click", () => {
     handleError(e);
   }
 });
-
-// Helper Functions
-function updateDisplay() {
-  input.value = currentInput;
-}
-
-function clearAll() {
-  currentInput = '0';
-  previousInput = '';
-  calculation = null;
-  shouldResetScreen = false;
-  updateDisplay();
-}
-
-function calculate() {
-  try {
-    // Don't evaluate empty expressions
-    if (currentInput === "") return;
-    
-    // Replace × with *, ÷ with / for eval
-    const expression = currentInput.replace(/×/g, '*').replace(/÷/g, '/');
-    
-    // Evaluate safely
-    const result = Function(`'use strict'; return (${expression})`)();
-    
-    if (!isFinite(result)) {
-      throw new Error("Math Error");
-    }
-    
-    currentInput = result.toString();
-    shouldResetScreen = true;
-    updateDisplay();
-  } catch (e) {
-    handleError(e);
-  }
-}
-
-function handleError(error) {
-   console.error("Calculator error:", error.message);
-  currentInput = "Error: " + error.message;
-    shouldResetScreen = true;
-    updateDisplay();
-  // Reset after showing error
-  setTimeout(clearAll, 1500);
-}
